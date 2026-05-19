@@ -1,4 +1,4 @@
-import threading, time, cv2, logging, numpy as np, torch
+import gc, threading, time, cv2, logging, numpy as np, torch
 from collections import deque
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
@@ -16,7 +16,7 @@ from detector import (
     RED_HOLD_SEC, RED_CONFIDENCE, vlm_abort,
     DEFAULT_PROXIMITY_PROMPT, DEFAULT_COUNT_CHANGE_PROMPT,
     DEFAULT_WEAPON_PROMPT, DEFAULT_SCENE_PROMPT,
-    telegram_notifier,
+    telegram_notifier, SUPPORTED_MODELS,
 )
 from notifications import MEDIA_ROOT, create_alert_context
 
@@ -49,6 +49,10 @@ class TelegramConfigPayload(BaseModel):
     enabled: bool | None = None
     bot_token: str | None = None
     chat_id: str | None = None
+
+class VlmLoadPayload(BaseModel):
+    model_key: str
+    quantization: str = "4bit"
 
 app = FastAPI(title="CCTV Surveillance API")
 app.add_middleware(
@@ -165,6 +169,42 @@ def reload_vlm():
         log.error("[VLM] OOM reload — staying CPU")
     except Exception as e:
         log.warning(f"[VLM] Reload: {e}")
+
+def load_vlm_with_config(model_key: str, quantization: str):
+    global vlm_model, vlm_processor
+    # Abort any running inference and wait for it to finish
+    vlm_abort.set()
+    t = _vlm_task["thread"]
+    if t and t.is_alive():
+        t.join(timeout=3.0)
+    vlm_abort.clear()
+
+    with state_lock:
+        state["vlm_enabled"]       = False
+        state["scene_description"] = ""
+
+    # Free old model from GPU memory before loading the new one
+    old_model     = vlm_model
+    vlm_model     = None
+    vlm_processor = None
+    if old_model is not None:
+        try:
+            old_model.cpu()
+        except Exception:
+            pass
+        del old_model
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+
+    new_model, new_proc = load_vlm(model_key, quantization)
+    vlm_model     = new_model
+    vlm_processor = new_proc
+
+    with state_lock:
+        state["mode_switching"] = False
+        if vlm_model is not None:
+            state["vlm_enabled"] = True
 
 
 # ── Engine ────────────────────────────────────────────────────────────────────
@@ -662,6 +702,8 @@ def get_status():
             "vlm_enabled":       state["vlm_enabled"],
             "vlm_interval":      state["vlm_interval"],
             "mode_switching":    state["mode_switching"],
+            "vlm_model_key":     state.get("vlm_model_key", "smolvlm_2b"),
+            "vlm_quantization":  state.get("vlm_quantization", "4bit"),
             "trigger_prompts":   dict(state["trigger_prompts"]),
             "vram_pct":          round(get_vram_pct(), 1),
             "telegram":          telegram_notifier.get_public_config(),
@@ -766,6 +808,39 @@ def set_interval(seconds: float):
     seconds = max(2.0, min(seconds, 30.0))
     with state_lock: state["vlm_interval"] = seconds
     return {"vlm_interval": seconds}
+
+# ── VLM model selection ────────────────────────────────────────────────────────
+@app.get("/vlm/models")
+def get_vlm_models():
+    with state_lock:
+        current_key   = state.get("vlm_model_key", "smolvlm_2b")
+        current_quant = state.get("vlm_quantization", "4bit")
+    return {
+        "models":               SUPPORTED_MODELS,
+        "current_model_key":    current_key,
+        "current_quantization": current_quant,
+    }
+
+@app.post("/vlm/load")
+def load_vlm_model(payload: VlmLoadPayload):
+    if payload.model_key not in SUPPORTED_MODELS:
+        raise HTTPException(status_code=400, detail=f"Unknown model key: {payload.model_key}")
+    if payload.quantization not in ("4bit", "8bit", "fp16"):
+        raise HTTPException(status_code=400, detail="quantization must be 4bit, 8bit, or fp16")
+    with state_lock:
+        if state["mode_switching"]:
+            return {"error": "Already loading a model"}
+        state["mode_switching"] = True
+    threading.Thread(
+        target=load_vlm_with_config,
+        args=(payload.model_key, payload.quantization),
+        daemon=True,
+    ).start()
+    return {
+        "status":       "loading",
+        "model_key":    payload.model_key,
+        "quantization": payload.quantization,
+    }
 
 # ── Trigger prompts ────────────────────────────────────────────────────────────
 @app.get("/trigger_prompts")

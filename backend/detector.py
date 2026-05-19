@@ -16,6 +16,30 @@ log = logging.getLogger(__name__)
 YOLO_MODEL_PATH = "yolo26n.pt"
 VLM_MODEL_ID    = "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
 
+SUPPORTED_MODELS = {
+    "smolvlm_2b": {
+        "id":     "HuggingFaceTB/SmolVLM2-2.2B-Instruct",
+        "name":   "SmolVLM2 2.2B",
+        "family": "smolvlm",
+        "vram_gb": {"4bit": 3, "8bit": 5, "fp16": 5},
+    },
+    "qwen_3b": {
+        "id":     "Qwen/Qwen2.5-VL-3B-Instruct",
+        "name":   "Qwen2.5-VL 3B",
+        "family": "qwen",
+        "vram_gb": {"4bit": 3, "8bit": 5, "fp16": 7},
+    },
+    "qwen_7b": {
+        "id":     "Qwen/Qwen2.5-VL-7B-Instruct",
+        "name":   "Qwen2.5-VL 7B",
+        "family": "qwen",
+        "vram_gb": {"4bit": 5, "8bit": 8, "fp16": 15},
+    },
+}
+
+_vlm_model_key    = "smolvlm_2b"
+_vlm_model_family = "smolvlm"
+
 THREAT_REPO     = "Subh775/Threat-Detection-YOLOv8n"
 THREAT_FILE     = "weights/best.pt"
 
@@ -64,6 +88,8 @@ state = {
     "vlm_enabled":       False,
     "vlm_interval":      10.0,       # passive scene interval 2–30s
     "mode_switching":    False,
+    "vlm_model_key":     "smolvlm_2b",
+    "vlm_quantization":  "4bit",
     "trigger_prompts": {             # per-trigger customizable prompts
         "proximity":    "",
         "count_change": "",
@@ -139,24 +165,62 @@ def load_threat_model():
         return model
 
 
-def load_vlm():
+def load_vlm(model_key: str = "smolvlm_2b", quantization: str = "4bit"):
+    global _vlm_model_key, _vlm_model_family
+    cfg = SUPPORTED_MODELS.get(model_key)
+    if cfg is None:
+        log.warning(f"[VLM] Unknown model key '{model_key}' — using smolvlm_2b")
+        model_key = "smolvlm_2b"
+        cfg       = SUPPORTED_MODELS["smolvlm_2b"]
+
+    model_id = cfg["id"]
+    family   = cfg["family"]
+    log.info(f"[VLM] Loading {cfg['name']} ({quantization})...")
+
     try:
-        from transformers import (
-            AutoProcessor,
-            AutoModelForImageTextToText,
-            BitsAndBytesConfig,
-        )
-        log.info("Loading SmolVLM2-2.2B-Instruct (4-bit)...")
-        bnb  = BitsAndBytesConfig(load_in_4bit=True,
-                                   bnb_4bit_compute_dtype=torch.bfloat16)
-        proc = AutoProcessor.from_pretrained(VLM_MODEL_ID)
-        mdl  = AutoModelForImageTextToText.from_pretrained(
-            VLM_MODEL_ID, quantization_config=bnb,
-            device_map="cuda", _attn_implementation="eager",
-        )
+        from transformers import AutoProcessor, BitsAndBytesConfig
+
+        if quantization == "4bit":
+            bnb      = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
+            extra_kw = {}
+        elif quantization == "8bit":
+            bnb      = BitsAndBytesConfig(load_in_8bit=True)
+            extra_kw = {}
+        else:  # fp16
+            bnb      = None
+            extra_kw = {"torch_dtype": torch.float16}
+
+        load_kw = {"device_map": "cuda"}
+        if bnb is not None:
+            load_kw["quantization_config"] = bnb
+        load_kw.update(extra_kw)
+
+        proc = AutoProcessor.from_pretrained(model_id)
+
+        if family == "smolvlm":
+            from transformers import AutoModelForImageTextToText
+            mdl = AutoModelForImageTextToText.from_pretrained(
+                model_id, _attn_implementation="eager", **load_kw
+            )
+        elif family == "qwen":
+            from transformers import Qwen2_5_VLForConditionalGeneration
+            mdl = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                model_id, **load_kw
+            )
+        else:
+            log.warning(f"[VLM] Unknown family '{family}'")
+            return None, None
+
         mdl.eval()
         _init_abort_criteria()
-        log.info("SmolVLM2-2.2B ready")
+
+        _vlm_model_key    = model_key
+        _vlm_model_family = family
+        with state_lock:
+            state["vlm_model_key"]    = model_key
+            state["vlm_quantization"] = quantization
+
+        log.info(f"[VLM] {cfg['name']} ({quantization}) ready")
         return mdl, proc
     except Exception as e:
         log.warning(f"[VLM] Load failed ({e}) — YOLO-only mode")
@@ -185,6 +249,38 @@ DEFAULT_SCENE_PROMPT = (
 
 
 # ── VLM inference ─────────────────────────────────────────────────────────────
+def _qwen_infer(img: Image.Image, prompt: str,
+                vlm_model, processor, max_tokens: int = 80,
+                deterministic: bool = False) -> str:
+    msgs = [{"role": "user", "content": [
+        {"type": "image"}, {"type": "text", "text": prompt}
+    ]}]
+    tp  = processor.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+    inp = processor(text=[tp], images=[img], return_tensors="pt").to(vlm_model.device)
+
+    if deterministic:
+        gen_kwargs = dict(do_sample=False, max_new_tokens=max_tokens)
+    else:
+        gen_kwargs = dict(do_sample=True, temperature=0.3,
+                          top_p=0.9, max_new_tokens=max_tokens)
+    if _abort_sc is not None:
+        gen_kwargs["stopping_criteria"] = _abort_sc
+
+    input_len = inp["input_ids"].shape[1]
+    with torch.inference_mode():
+        out = vlm_model.generate(**inp, **gen_kwargs)
+    del inp
+
+    if vlm_abort.is_set():
+        log.info("[VLM] Generation aborted — discarding result")
+        return ""
+
+    generated_ids = out[:, input_len:]
+    res = processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
+    lines = [l.strip() for l in res.split("\n") if l.strip()]
+    return lines[0] if lines else res
+
+
 def smolvlm_infer(crop_bgr: np.ndarray, prompt: str,
                   vlm_model, processor, max_tokens: int = 80,
                   deterministic: bool = False) -> str:
@@ -201,6 +297,10 @@ def smolvlm_infer(crop_bgr: np.ndarray, prompt: str,
             crop_bgr = cv2.resize(crop_bgr, (int(w*scale), int(h*scale)),
                                   interpolation=cv2.INTER_AREA)
         img  = Image.fromarray(cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB))
+
+        if _vlm_model_family == "qwen":
+            return _qwen_infer(img, prompt, vlm_model, processor, max_tokens, deterministic)
+
         msgs = [{"role": "user", "content": [
             {"type": "image"}, {"type": "text", "text": prompt}
         ]}]

@@ -883,8 +883,25 @@ export default function App() {
   const [telegramSaving, setTelegramSaving] = useState(false)
   const [telegramTesting,setTelegramTesting]= useState(false)
   const [telegramFeedback, setTelegramFeedback] = useState("")
+  const [vlmModels,        setVlmModels]        = useState(null)
+  const [selectedModelKey, setSelectedModelKey] = useState("smolvlm_2b")
+  const [selectedQuant,    setSelectedQuant]    = useState("4bit")
+  const [modelLoading,     setModelLoading]     = useState(false)
+  const [modelLoadError,   setModelLoadError]   = useState("")
 
   const fileRef = useRef(null)
+
+  // ── Fetch available VLM models once on mount ──────────────────────────────
+  useEffect(() => {
+    fetch(`${API}/vlm/models`)
+      .then(r => r.json())
+      .then(data => {
+        setVlmModels(data)
+        setSelectedModelKey(data.current_model_key ?? "smolvlm_2b")
+        setSelectedQuant(data.current_quantization ?? "4bit")
+      })
+      .catch(() => {})
+  }, [])
 
   // ── Polling ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1048,6 +1065,25 @@ export default function App() {
   const stopStream = () =>
     fetch(`${API}/stop`, { method: "POST" }).catch(() => {})
 
+  const loadVlmModel = async () => {
+    if (modelLoading || isSwitching) return
+    setModelLoading(true)
+    setModelLoadError("")
+    try {
+      const r = await fetch(`${API}/vlm/load`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ model_key: selectedModelKey, quantization: selectedQuant }),
+      })
+      const d = await r.json()
+      if (!r.ok) setModelLoadError(d.detail || d.error || "Load failed")
+    } catch {
+      setModelLoadError("Request failed")
+    } finally {
+      setModelLoading(false)
+    }
+  }
+
   // ── Derived ────────────────────────────────────────────────────────────────
   const isRunning   = status?.running        ?? false
   const yoloEnabled = status?.yolo_enabled   ?? false
@@ -1076,7 +1112,9 @@ export default function App() {
           <div className="w-14 h-14 rounded-full border-4 border-gray-700
                           border-t-purple-500 animate-spin mb-5" />
           <p className="text-white font-bold text-xl mb-1">Loading VLM onto GPU</p>
-          <p className="text-gray-400 text-sm mb-6">SmolVLM2-2.2B — please wait…</p>
+          <p className="text-gray-400 text-sm mb-6">
+            {vlmModels?.models?.[selectedModelKey]?.name ?? "VLM Model"} ({selectedQuant}) — please wait…
+          </p>
           <div className="w-64 bg-gray-900 rounded-2xl p-4 border border-gray-800">
             <VramBar vram={vram} />
           </div>
@@ -1341,6 +1379,88 @@ export default function App() {
                     </p>
                   </section>
                 )}
+                {/* VLM Model Selector */}
+                <section>
+                  <p className="flex items-center gap-1.5 text-xs text-gray-500 font-bold uppercase
+                                tracking-wider mb-2.5">
+                    <Brain size={13} /> VLM Model
+                  </p>
+
+                  {/* Active model badge */}
+                  {status?.vlm_model_key && (
+                    <div className="mb-2 bg-purple-950/30 border border-purple-900/50 rounded-lg
+                                    px-2.5 py-1.5 flex items-center justify-between">
+                      <p className="text-[11px] text-purple-300 font-semibold truncate">
+                        {vlmModels?.models?.[status.vlm_model_key]?.name ?? status.vlm_model_key}
+                      </p>
+                      <span className="text-[11px] text-gray-600 shrink-0 ml-1">
+                        {status.vlm_quantization}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Model buttons */}
+                  <div className="flex flex-col gap-1 mb-2.5">
+                    {vlmModels
+                      ? Object.entries(vlmModels.models).map(([key, m]) => (
+                          <button
+                            key={key}
+                            onClick={() => setSelectedModelKey(key)}
+                            className={`text-xs px-2.5 py-1.5 rounded-lg font-semibold
+                                        text-left transition-all flex items-center justify-between
+                              ${selectedModelKey === key
+                                ? "bg-purple-700 text-white"
+                                : "bg-gray-800/60 text-gray-400 hover:text-gray-200 border border-gray-700/50"}`}
+                          >
+                            <span>{m.name}</span>
+                            <span className="text-[11px] opacity-60">
+                              ~{m.vram_gb[selectedQuant]}GB
+                            </span>
+                          </button>
+                        ))
+                      : <p className="text-xs text-gray-600 italic">Loading…</p>
+                    }
+                  </div>
+
+                  {/* Quantization buttons */}
+                  <p className="text-[11px] text-gray-600 mb-1.5 uppercase tracking-wider">Quantization</p>
+                  <div className="flex gap-1 mb-2.5">
+                    {["4bit", "8bit", "fp16"].map(q => (
+                      <button
+                        key={q}
+                        onClick={() => setSelectedQuant(q)}
+                        className={`flex-1 text-xs py-1.5 rounded-lg font-semibold transition-all
+                          ${selectedQuant === q
+                            ? "bg-purple-700 text-white"
+                            : "bg-gray-800/60 text-gray-400 hover:text-gray-200 border border-gray-700/50"}`}
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+
+                  {modelLoadError && (
+                    <p className="text-[11px] text-red-400 mb-1.5">{modelLoadError}</p>
+                  )}
+
+                  <button
+                    onClick={loadVlmModel}
+                    disabled={modelLoading || isSwitching}
+                    className="w-full text-xs py-1.5 rounded-lg font-semibold transition-all
+                               bg-purple-800 hover:bg-purple-700 text-white
+                               disabled:opacity-50 flex items-center justify-center gap-1.5"
+                  >
+                    {(modelLoading || isSwitching)
+                      ? <>
+                          <span className="w-3 h-3 rounded-full border-2 border-purple-300
+                                           border-t-transparent animate-spin" />
+                          Loading…
+                        </>
+                      : <><Brain size={12} /> Load Model</>
+                    }
+                  </button>
+                </section>
+
                 <TelegramSettings
                   config={telegramConfig}
                   form={telegramForm}

@@ -227,25 +227,98 @@ def load_vlm(model_key: str = "smolvlm_2b", quantization: str = "4bit"):
         return None, None
 
 
-# ── Default prompts ───────────────────────────────────────────────────────────
+# ── Default prompts (SmolVLM family) ─────────────────────────────────────────
+DEFAULT_SCENE_PROMPT = (
+    "You are a surveillance analyst. Describe who is present and what they are doing. "
+    "Note anything unusual or suspicious. One to two sentences."
+)
 DEFAULT_PROXIMITY_PROMPT = (
-    "Surveillance camera. Two people are in very close contact. "
-    "Reply with SAFE, SUSPICIOUS, or THREATENING. "
-    "Then explain in 6 words max."
+    "You are a surveillance analyst. Two people are in close physical contact. "
+    "Is this SAFE, SUSPICIOUS, or THREATENING? Explain briefly in one sentence."
 )
 DEFAULT_COUNT_CHANGE_PROMPT = (
-    "Surveillance camera. Person count just changed. "
-    "Describe the action in 8 words max."
+    "You are a surveillance analyst. The number of people in the scene just changed. "
+    "Describe who entered or left and what they are doing now. One sentence."
 )
 DEFAULT_WEAPON_PROMPT = (
-    "Surveillance camera. A bladed object is visible. "
+    "You are a surveillance analyst. A bladed object is visible in this frame. "
     "Reply with HELD_THREATENING, HELD_SAFE, or NOT_HELD. "
-    "One reason in 6 words."
+    "Then briefly describe what you observe."
 )
-DEFAULT_SCENE_PROMPT = (
-    "Surveillance camera. Describe the scene in 8 words max. "
-    "Focus on people's actions."
+
+# ── Qwen-specific prompts (structured, more detailed) ─────────────────────────
+QWEN_SCENE_PROMPT = (
+    "You are a security camera AI. Analyze this surveillance frame. "
+    "Describe: how many people are present, what each person is doing, "
+    "and any suspicious behavior or unusual objects. "
+    "Be specific and concise. 1-2 sentences."
 )
+QWEN_PROXIMITY_PROMPT = (
+    "You are a security camera AI. Two people are in close physical contact. "
+    "Classify as SAFE, SUSPICIOUS, or THREATENING. "
+    "Then describe specifically what you observe about their interaction in one sentence."
+)
+QWEN_COUNT_CHANGE_PROMPT = (
+    "You are a security camera AI. The number of people in the scene just changed. "
+    "Describe who entered or left the frame, what direction they moved, "
+    "and what everyone in the scene is doing now. One sentence."
+)
+QWEN_WEAPON_PROMPT = (
+    "You are a security camera AI. A bladed weapon or dangerous object is visible. "
+    "Reply with HELD_THREATENING, HELD_SAFE, or NOT_HELD. "
+    "Then describe: what the object is, who is holding it, and their posture."
+)
+
+
+# ── Model-aware prompt selectors ──────────────────────────────────────────────
+def get_scene_prompt() -> str:
+    return QWEN_SCENE_PROMPT if _vlm_model_family == "qwen" else DEFAULT_SCENE_PROMPT
+
+def get_proximity_prompt() -> str:
+    return QWEN_PROXIMITY_PROMPT if _vlm_model_family == "qwen" else DEFAULT_PROXIMITY_PROMPT
+
+def get_count_change_prompt() -> str:
+    return QWEN_COUNT_CHANGE_PROMPT if _vlm_model_family == "qwen" else DEFAULT_COUNT_CHANGE_PROMPT
+
+def get_weapon_prompt() -> str:
+    return QWEN_WEAPON_PROMPT if _vlm_model_family == "qwen" else DEFAULT_WEAPON_PROMPT
+
+def get_person_prompt() -> str:
+    if _vlm_model_family == "qwen":
+        return (
+            "Describe this person: their clothing, posture, current action, "
+            "and anything suspicious or notable. One sentence."
+        )
+    return (
+        "Describe this person: what they are wearing, what they are doing, "
+        "and anything notable about their behavior. One sentence."
+    )
+
+def get_temporal_scene_prompt(last_desc: str) -> str:
+    last_desc = last_desc[:150].strip()
+    if _vlm_model_family == "qwen":
+        return (
+            f"You are a security camera AI. Previous observation: '{last_desc}'. "
+            "What is happening now? Describe any changes and the current scene. 1-2 sentences."
+        )
+    return (
+        f"Previous: '{last_desc}'. "
+        "What is happening now? Note any changes and describe the current situation. 1-2 sentences."
+    )
+
+def get_temporal_count_prompt(last_desc: str, prev_count: int, cur_count: int) -> str:
+    last_desc = last_desc[:120].strip()
+    direction = "entered" if cur_count > prev_count else "left"
+    if _vlm_model_family == "qwen":
+        return (
+            f"You are a security camera AI. Previously: '{last_desc}'. "
+            f"The person count changed from {prev_count} to {cur_count} — someone {direction}. "
+            "Describe what is happening now. One sentence."
+        )
+    return (
+        f"Previous: '{last_desc}'. Count {prev_count}→{cur_count}, someone {direction}. "
+        "What is happening now? One sentence."
+    )
 
 
 # ── VLM inference ─────────────────────────────────────────────────────────────
@@ -388,9 +461,9 @@ def _classify_weapon_text(raw: str) -> dict:
 
 def run_vlm_threat(crop_bgr: np.ndarray, vlm_model, processor,
                    custom_prompt: str = "") -> dict:
-    prompt = custom_prompt or DEFAULT_WEAPON_PROMPT
+    prompt = custom_prompt or get_weapon_prompt()
     raw    = smolvlm_infer(crop_bgr, prompt, vlm_model, processor,
-                           max_tokens=40, deterministic=True)
+                           max_tokens=60, deterministic=True)
     if not raw:
         return {"threat": False, "type": "none",
                 "confidence": "low", "description": "Aborted or no response"}

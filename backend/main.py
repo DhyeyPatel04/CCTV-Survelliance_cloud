@@ -17,6 +17,8 @@ from detector import (
     DEFAULT_PROXIMITY_PROMPT, DEFAULT_COUNT_CHANGE_PROMPT,
     DEFAULT_WEAPON_PROMPT, DEFAULT_SCENE_PROMPT,
     telegram_notifier, SUPPORTED_MODELS,
+    get_scene_prompt, get_proximity_prompt, get_count_change_prompt,
+    get_person_prompt, get_temporal_scene_prompt, get_temporal_count_prompt,
 )
 from notifications import MEDIA_ROOT, create_alert_context
 
@@ -258,8 +260,8 @@ def run_engine(source):
             push_alert("YELLOW", "Weapon detected - unconfirmed by VLM", r, alert_context=alert_context)
 
     def do_proximity_vlm(crop, prompt, alert_context):
-        desc = smolvlm_infer(crop, prompt or DEFAULT_PROXIMITY_PROMPT,
-                             vlm_model, vlm_processor, max_tokens=40)
+        desc = smolvlm_infer(crop, prompt or get_proximity_prompt(),
+                             vlm_model, vlm_processor, max_tokens=60)
         if not desc:
             push_alert("YELLOW", "Sustained contact detected", alert_context=alert_context)
             return
@@ -280,8 +282,16 @@ def run_engine(source):
             state["scene_description"] = desc
 
     def do_count_change_vlm(crop, prompt, previous_count, current_count, alert_context):
-        desc = smolvlm_infer(crop, prompt or DEFAULT_COUNT_CHANGE_PROMPT,
-                             vlm_model, vlm_processor, max_tokens=60)
+        if prompt:
+            final_prompt = prompt
+        else:
+            with state_lock:
+                last_desc = state["scene_description"]
+            final_prompt = (
+                get_temporal_count_prompt(last_desc, previous_count, current_count)
+                if last_desc else get_count_change_prompt()
+            )
+        desc = smolvlm_infer(crop, final_prompt, vlm_model, vlm_processor, max_tokens=100)
         if desc:
             with state_lock:
                 state["scene_description"] = desc
@@ -304,8 +314,16 @@ def run_engine(source):
             )
 
     def do_scene_vlm(crop, prompt):
-        desc = smolvlm_infer(crop, prompt or DEFAULT_SCENE_PROMPT,
-                             vlm_model, vlm_processor, max_tokens=60)
+        if prompt:
+            final_prompt = prompt
+        else:
+            with state_lock:
+                last_desc = state["scene_description"]
+            final_prompt = (
+                get_temporal_scene_prompt(last_desc) if last_desc
+                else get_scene_prompt()
+            )
+        desc = smolvlm_infer(crop, final_prompt, vlm_model, vlm_processor, max_tokens=100)
         if desc:
             with state_lock:
                 state["scene_description"] = desc
@@ -539,9 +557,8 @@ def run_engine(source):
                             def _person_desc(t_id=tid, c=crop.copy()):
                                 desc = smolvlm_infer(
                                     c,
-                                    "Describe this person's actions in 1 sentence. "
-                                    "What is most noticeable about them?",
-                                    vlm_model, vlm_processor, max_tokens=60
+                                    get_person_prompt(),
+                                    vlm_model, vlm_processor, max_tokens=80
                                 )
                                 if desc:
                                     with state_lock:

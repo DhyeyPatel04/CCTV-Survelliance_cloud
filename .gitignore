@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+venv_backend/
+venv/
+env/
+
+# Secrets - NEVER commit
+backend/.env
+
+# Runtime generated
+backend/media/
+backend/uploads/
+backend/logs/
+*.log
+
+# Models from HuggingFace (auto-downloaded on first run)
+*.gguf
+*.bin
+*.safetensors
+.cache/
+backend/models/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/package-lock.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code / AI assistant files
+CLAUDE.md
+AGENTS.md

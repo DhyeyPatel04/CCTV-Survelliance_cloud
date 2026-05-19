@@ -291,15 +291,23 @@ def smolvlm_infer(crop_bgr: np.ndarray, prompt: str,
     if crop_bgr is None or crop_bgr.size == 0 or crop_bgr.shape[0] < 8 or crop_bgr.shape[1] < 8:
         return ""
     try:
-        h, w  = crop_bgr.shape[:2]
+        h, w = crop_bgr.shape[:2]
+
+        if _vlm_model_family == "qwen":
+            # Qwen2.5-VL supports dynamic high resolution — give it up to 1024px
+            scale = 1024 / max(h, w)
+            if scale < 1.0:
+                crop_bgr = cv2.resize(crop_bgr, (int(w*scale), int(h*scale)),
+                                      interpolation=cv2.INTER_AREA)
+            img = Image.fromarray(cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB))
+            return _qwen_infer(img, prompt, vlm_model, processor, max_tokens, deterministic)
+
+        # SmolVLM is trained at 512px — keep original limit
         scale = 512 / max(h, w)
         if scale < 1.0:
             crop_bgr = cv2.resize(crop_bgr, (int(w*scale), int(h*scale)),
                                   interpolation=cv2.INTER_AREA)
         img  = Image.fromarray(cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB))
-
-        if _vlm_model_family == "qwen":
-            return _qwen_infer(img, prompt, vlm_model, processor, max_tokens, deterministic)
 
         msgs = [{"role": "user", "content": [
             {"type": "image"}, {"type": "text", "text": prompt}

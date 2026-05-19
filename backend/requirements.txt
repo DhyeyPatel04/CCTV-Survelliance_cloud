@@ -3,6 +3,8 @@ torch==2.5.1
 torchvision==0.20.1
 transformers==4.47.0
 accelerate==1.1.0
+ultralytics
+bitsandbytes
 
 # FastAPI
 fastapi==0.115.0

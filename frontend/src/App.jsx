@@ -874,9 +874,11 @@ export default function App() {
   const [toggling,       setToggling]       = useState({ yolo: false, vlm: false })
   const [intervalInput,  setIntervalInput]  = useState(10)
   const [intervalSaving, setIntervalSaving] = useState(false)
+  const [intervalDirty,  setIntervalDirty]  = useState(false)
   const [prompts,        setPrompts]        = useState({ proximity: "", count_change: "", weapon: "" })
   const [promptSaving,   setPromptSaving]   = useState({ proximity: false, count_change: false, weapon: false })
   const [promptSaved,    setPromptSaved]    = useState({ proximity: false, count_change: false, weapon: false })
+  const [promptDirty,    setPromptDirty]    = useState({ proximity: false, count_change: false, weapon: false })
   const [telegramConfig, setTelegramConfig] = useState(null)
   const [telegramForm,   setTelegramForm]   = useState({ enabled: false, botToken: "", chatId: "" })
   const [telegramDirty,  setTelegramDirty]  = useState(false)
@@ -925,13 +927,13 @@ export default function App() {
               })
             }
           }
-          if (!intervalSaving)
-            setIntervalInput(Math.max(2, Math.min(30, Math.round(s.vlm_interval ?? 10))))
+          if (!intervalSaving && !intervalDirty)
+            setIntervalInput(Math.max(1, Math.min(30, Math.round(s.vlm_interval ?? 10))))
           if (s.trigger_prompts) {
             setPrompts(prev => ({
-              proximity:    promptSaving.proximity    ? prev.proximity    : (s.trigger_prompts.proximity    ?? ""),
-              count_change: promptSaving.count_change ? prev.count_change : (s.trigger_prompts.count_change ?? ""),
-              weapon:       promptSaving.weapon       ? prev.weapon       : (s.trigger_prompts.weapon       ?? ""),
+              proximity:    (promptSaving.proximity    || promptDirty.proximity)    ? prev.proximity    : (s.trigger_prompts.proximity    ?? ""),
+              count_change: (promptSaving.count_change || promptDirty.count_change) ? prev.count_change : (s.trigger_prompts.count_change ?? ""),
+              weapon:       (promptSaving.weapon       || promptDirty.weapon)       ? prev.weapon       : (s.trigger_prompts.weapon       ?? ""),
             }))
           }
           setToggling(prev => ({
@@ -947,7 +949,7 @@ export default function App() {
     poll()
     const iv = setInterval(poll, 800)
     return () => clearInterval(iv)
-  }, [intervalSaving, promptSaving.proximity, promptSaving.count_change, promptSaving.weapon, telegramDirty, telegramSaving])
+  }, [intervalSaving, intervalDirty, promptSaving.proximity, promptSaving.count_change, promptSaving.weapon, promptDirty.proximity, promptDirty.count_change, promptDirty.weapon, telegramDirty, telegramSaving])
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const toggleYolo = useCallback(async val => {
@@ -965,14 +967,16 @@ export default function App() {
   }, [toggling.vlm])
 
   const saveInterval = async () => {
-    const v = Math.max(2, Math.min(30, Number(intervalInput)))
+    const v = Math.max(1, Math.min(30, Number(intervalInput)))
     setIntervalInput(v)
+    setIntervalDirty(false)
     setIntervalSaving(true)
     try { await fetch(`${API}/vlm/interval?seconds=${v}`, { method: "POST" }) }
     finally { setIntervalSaving(false) }
   }
 
   const savePrompt = async type => {
+    setPromptDirty(p => ({ ...p, [type]: false }))
     setPromptSaving(p => ({ ...p, [type]: true }))
     try {
       await fetch(
@@ -986,6 +990,7 @@ export default function App() {
 
   const clearPrompt = async type => {
     setPrompts(p => ({ ...p, [type]: "" }))
+    setPromptDirty(p => ({ ...p, [type]: false }))
     await fetch(`${API}/trigger_prompts/${type}`, { method: "DELETE" }).catch(() => {})
   }
 
@@ -1341,24 +1346,22 @@ export default function App() {
                     </p>
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => setIntervalInput(v => Math.max(2, v - 1))}
+                        onClick={() => { setIntervalInput(v => Math.max(1, v - 1)); setIntervalDirty(true) }}
                         className="w-8 h-8 rounded-lg bg-gray-700 hover:bg-gray-600
                                    text-white font-bold text-lg flex items-center
                                    justify-center shrink-0 transition-colors">
                         −
                       </button>
                       <input
-                        type="number" min={2} max={30}
+                        type="number" min={1} max={30}
                         value={intervalInput}
-                        onChange={e => setIntervalInput(
-                          Math.max(2, Math.min(30, Number(e.target.value)))
-                        )}
+                        onChange={e => { setIntervalInput(Math.max(1, Math.min(30, Number(e.target.value)))); setIntervalDirty(true) }}
                         className="flex-1 text-center text-lg font-black bg-gray-800
                                    border border-gray-700 rounded-lg py-1.5 text-white
                                    focus:outline-none focus:border-blue-500"
                       />
                       <button
-                        onClick={() => setIntervalInput(v => Math.min(30, v + 1))}
+                        onClick={() => { setIntervalInput(v => Math.min(30, v + 1)); setIntervalDirty(true) }}
                         className="w-8 h-8 rounded-lg bg-gray-700 hover:bg-gray-600
                                    text-white font-bold text-lg flex items-center
                                    justify-center shrink-0 transition-colors">
@@ -1375,7 +1378,7 @@ export default function App() {
                       {intervalSaving ? "Saving…" : "✓ Apply"}
                     </button>
                     <p className="text-xs text-gray-700 mt-1 text-center">
-                      Min 2s · Max 30s
+                      Min 1s · Max 30s
                     </p>
                   </section>
                 )}
@@ -1490,7 +1493,7 @@ export default function App() {
                     key={type}
                     triggerType={type}
                     value={prompts[type]}
-                    onChange={v => setPrompts(p => ({ ...p, [type]: v }))}
+                    onChange={v => { setPrompts(p => ({ ...p, [type]: v })); setPromptDirty(p => ({ ...p, [type]: true })) }}
                     onSave={() => savePrompt(type)}
                     onClear={() => clearPrompt(type)}
                     saving={promptSaving[type]}

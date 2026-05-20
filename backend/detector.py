@@ -229,8 +229,9 @@ def load_vlm(model_key: str = "smolvlm_2b", quantization: str = "4bit"):
 
 # ── Default prompts (SmolVLM family) ─────────────────────────────────────────
 DEFAULT_SCENE_PROMPT = (
-    "You are a surveillance analyst. Describe who is present and what they are doing. "
-    "Note anything unusual or suspicious. One to two sentences."
+    "You are a surveillance security analyst monitoring a CCTV feed. "
+    "Describe what you see, then end with one of: SAFE / SUSPICIOUS / THREATENING. "
+    "One to two sentences."
 )
 DEFAULT_PROXIMITY_PROMPT = (
     "You are a surveillance analyst. Two people are in close physical contact. "
@@ -248,10 +249,10 @@ DEFAULT_WEAPON_PROMPT = (
 
 # ── Qwen-specific prompts (structured, more detailed) ─────────────────────────
 QWEN_SCENE_PROMPT = (
-    "You are a security camera AI. Analyze this surveillance frame. "
-    "Describe: how many people are present, what each person is doing, "
+    "You are a security camera AI monitoring a CCTV feed. "
+    "Describe how many people are present, what each is doing, "
     "and any suspicious behavior or unusual objects. "
-    "Be specific and concise. 1-2 sentences."
+    "End with SAFE, SUSPICIOUS, or THREATENING. 1-2 sentences."
 )
 QWEN_PROXIMITY_PROMPT = (
     "You are a security camera AI. Two people are in close physical contact. "
@@ -299,11 +300,11 @@ def get_temporal_scene_prompt(last_desc: str) -> str:
     if _vlm_model_family == "qwen":
         return (
             f"You are a security camera AI. Previous observation: '{last_desc}'. "
-            "What is happening now? Describe any changes and the current scene. 1-2 sentences."
+            "What is happening now? Describe any changes and end with SAFE, SUSPICIOUS, or THREATENING. 1-2 sentences."
         )
     return (
         f"Previous: '{last_desc}'. "
-        "What is happening now? Note any changes and describe the current situation. 1-2 sentences."
+        "What is happening now? Note any changes. End with SAFE, SUSPICIOUS, or THREATENING. 1-2 sentences."
     )
 
 def get_temporal_count_prompt(last_desc: str, prev_count: int, cur_count: int) -> str:

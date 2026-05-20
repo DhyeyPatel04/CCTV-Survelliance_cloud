@@ -822,7 +822,7 @@ def vlm_disable():
 # ── VLM interval (2–30 s) ─────────────────────────────────────────────────────
 @app.post("/vlm/interval")
 def set_interval(seconds: float):
-    seconds = max(2.0, min(seconds, 30.0))
+    seconds = max(1.0, min(seconds, 30.0))
     with state_lock: state["vlm_interval"] = seconds
     return {"vlm_interval": seconds}
 

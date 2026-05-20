@@ -229,17 +229,21 @@ def load_vlm(model_key: str = "smolvlm_2b", quantization: str = "4bit"):
 
 # ── Default prompts (SmolVLM family) ─────────────────────────────────────────
 DEFAULT_SCENE_PROMPT = (
-    "You are a surveillance security analyst monitoring a CCTV feed. "
-    "Describe what you see, then end with one of: SAFE / SUSPICIOUS / THREATENING. "
-    "One to two sentences."
+    "You are a CCTV security analyst watching for crimes: robbery, assault, theft, trespassing, or threatening behavior. "
+    "Describe who is present and what they are doing. "
+    "Flag any abnormal behavior — people in restricted areas, aggressive posture, forced entry, or confrontation. "
+    "End with SAFE, SUSPICIOUS, or THREATENING. One to two sentences."
 )
 DEFAULT_PROXIMITY_PROMPT = (
-    "You are a surveillance analyst. Two people are in close physical contact. "
-    "Is this SAFE, SUSPICIOUS, or THREATENING? Explain briefly in one sentence."
+    "You are a surveillance analyst. Two people are in close contact. "
+    "Is one person threatening, grabbing, or assaulting the other? "
+    "Reply SAFE, SUSPICIOUS, or THREATENING in one sentence."
 )
 DEFAULT_COUNT_CHANGE_PROMPT = (
-    "You are a surveillance analyst. The number of people in the scene just changed. "
-    "Describe who entered or left and what they are doing now. One sentence."
+    "You are a surveillance analyst. Someone just entered or left. "
+    "Describe their posture, movement, and any objects they carry. "
+    "Does their behavior suggest robbery, forced entry, or a threat? "
+    "End with SAFE, SUSPICIOUS, or THREATENING. One sentence."
 )
 DEFAULT_WEAPON_PROMPT = (
     "You are a surveillance analyst. A bladed object is visible in this frame. "
@@ -249,20 +253,21 @@ DEFAULT_WEAPON_PROMPT = (
 
 # ── Qwen-specific prompts (structured, more detailed) ─────────────────────────
 QWEN_SCENE_PROMPT = (
-    "You are a security camera AI monitoring a CCTV feed. "
-    "Describe how many people are present, what each is doing, "
-    "and any suspicious behavior or unusual objects. "
+    "You are a CCTV security AI watching for crimes: robbery, assault, theft, or threatening behavior. "
+    "Describe how many people are present and what each is doing. "
+    "Flag abnormal behavior: weapons, aggressive posture, forced entry, or people in restricted areas. "
     "End with SAFE, SUSPICIOUS, or THREATENING. 1-2 sentences."
 )
 QWEN_PROXIMITY_PROMPT = (
     "You are a security camera AI. Two people are in close physical contact. "
-    "Classify as SAFE, SUSPICIOUS, or THREATENING. "
-    "Then describe specifically what you observe about their interaction in one sentence."
+    "Is one person assaulting, grabbing, or threatening the other? "
+    "Classify as SAFE, SUSPICIOUS, or THREATENING and describe the interaction in one sentence."
 )
 QWEN_COUNT_CHANGE_PROMPT = (
-    "You are a security camera AI. The number of people in the scene just changed. "
-    "Describe who entered or left the frame, what direction they moved, "
-    "and what everyone in the scene is doing now. One sentence."
+    "You are a security camera AI. Someone just entered or left the frame. "
+    "Describe their posture, movement speed, and any objects they carry. "
+    "Does this look like a robbery, forced entry, or escape? "
+    "End with SAFE, SUSPICIOUS, or THREATENING. One sentence."
 )
 QWEN_WEAPON_PROMPT = (
     "You are a security camera AI. A bladed weapon or dangerous object is visible. "
@@ -299,12 +304,14 @@ def get_temporal_scene_prompt(last_desc: str) -> str:
     last_desc = last_desc[:150].strip()
     if _vlm_model_family == "qwen":
         return (
-            f"You are a security camera AI. Previous observation: '{last_desc}'. "
-            "What is happening now? Describe any changes and end with SAFE, SUSPICIOUS, or THREATENING. 1-2 sentences."
+            f"You are a CCTV security AI watching for crimes. Previous observation: '{last_desc}'. "
+            "What is happening now? Has the situation escalated? Flag robbery, assault, or threats. "
+            "End with SAFE, SUSPICIOUS, or THREATENING. 1-2 sentences."
         )
     return (
         f"Previous: '{last_desc}'. "
-        "What is happening now? Note any changes. End with SAFE, SUSPICIOUS, or THREATENING. 1-2 sentences."
+        "What is happening now? Has the situation changed or escalated? "
+        "End with SAFE, SUSPICIOUS, or THREATENING. 1-2 sentences."
     )
 
 def get_temporal_count_prompt(last_desc: str, prev_count: int, cur_count: int) -> str:
@@ -312,13 +319,15 @@ def get_temporal_count_prompt(last_desc: str, prev_count: int, cur_count: int) -
     direction = "entered" if cur_count > prev_count else "left"
     if _vlm_model_family == "qwen":
         return (
-            f"You are a security camera AI. Previously: '{last_desc}'. "
-            f"The person count changed from {prev_count} to {cur_count} — someone {direction}. "
-            "Describe what is happening now. One sentence."
+            f"You are a CCTV security AI. Previously: '{last_desc}'. "
+            f"Count changed {prev_count}→{cur_count}, someone {direction}. "
+            "Describe their behavior and whether this looks like robbery, escape, or normal activity. "
+            "End with SAFE, SUSPICIOUS, or THREATENING. One sentence."
         )
     return (
         f"Previous: '{last_desc}'. Count {prev_count}→{cur_count}, someone {direction}. "
-        "What is happening now? One sentence."
+        "Does their behavior suggest robbery or a threat? "
+        "End with SAFE, SUSPICIOUS, or THREATENING. One sentence."
     )
 
 
